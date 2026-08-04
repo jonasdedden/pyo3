@@ -3,9 +3,13 @@
 
 use crate::exceptions::PyStopAsyncIteration;
 use crate::impl_::callback::IntoPyCallbackOutput;
+#[cfg(feature = "experimental-inspect")]
+use crate::impl_::introspection::PyReturnType;
 use crate::impl_::panic::PanicTrap;
 use crate::impl_::pycell::PyClassObjectBaseLayout;
 use crate::impl_::pyclass::PyClassDict as _;
+#[cfg(feature = "experimental-inspect")]
+use crate::inspect::PyStaticExpr;
 use crate::internal::get_slot::{get_slot, TP_BASE, TP_CLEAR, TP_TRAVERSE};
 use crate::internal::pyclass_init::PyClassInit;
 use crate::internal::state::ForbidAttaching;
@@ -772,6 +776,47 @@ pub trait AsyncIterResultOptionKind {
 
 impl<Value, Error> AsyncIterResultOptionKind for Result<Option<Value>, Error> {}
 
+// The introspection counterpart of the tags above.
+//
+// It cannot be built out of them: autoref specialization resolves on a *value*, while a type hint
+// is a const and only ever has the return *type* to work with. So the same three shapes are
+// matched again, at the type level, by inherent consts which take priority over the blanket
+// fallback impl. `__next__` and `__anext__` share this: they encode exhaustion the same way and
+// only differ in how the slot signals it, which the type hint does not care about.
+//
+// These two lists must agree. `tests::iter_next_shapes_agree` walks every shape through both, so
+// teaching one about a new shape and not the other fails the test suite.
+
+/// Resolves the Python type a `__next__` / `__anext__` return type yields.
+#[cfg(feature = "experimental-inspect")]
+pub struct IterNextOutput<T>(PhantomData<T>);
+
+/// The type hint of every return type not listed as an inherent impl of [`IterNextOutput`]: the
+/// whole return type is visible from Python.
+#[cfg(feature = "experimental-inspect")]
+pub trait IterNextOutputFallback {
+    const OUTPUT_TYPE: PyStaticExpr;
+}
+
+#[cfg(feature = "experimental-inspect")]
+impl<T: PyReturnType> IterNextOutputFallback for IterNextOutput<T> {
+    const OUTPUT_TYPE: PyStaticExpr = <T as PyReturnType>::OUTPUT_TYPE;
+}
+
+#[cfg(feature = "experimental-inspect")]
+impl<T: PyReturnType> IterNextOutput<Option<T>> {
+    /// `None` ends the iteration rather than being yielded, so it is not part of the
+    /// Python-visible return type.
+    pub const OUTPUT_TYPE: PyStaticExpr = <T as PyReturnType>::OUTPUT_TYPE;
+}
+
+#[cfg(feature = "experimental-inspect")]
+impl<T: PyReturnType, E> IterNextOutput<Result<Option<T>, E>> {
+    /// `None` ends the iteration rather than being yielded, so it is not part of the
+    /// Python-visible return type.
+    pub const OUTPUT_TYPE: PyStaticExpr = <T as PyReturnType>::OUTPUT_TYPE;
+}
+
 /// Re-exported so that `#[new]` generated code can resolve the type tag for `tp_new_impl`
 pub use crate::internal::pyclass_init::tp_new_resolver;
 
@@ -798,6 +843,129 @@ where
 mod tests {
     #[allow(unused_imports, reason = "conditionally used")]
     use crate::platform::prelude::*;
+
+    /// Which shape the `__next__` / `__anext__` tags resolved a value to, so that a test can
+    /// observe the same specialization the generated slots go through.
+    #[cfg(feature = "experimental-inspect")]
+    mod shape {
+        #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+        pub(super) enum Shape {
+            Plain,
+            Option,
+            ResultOption,
+        }
+
+        impl crate::impl_::pymethods::IterBaseTag {
+            pub(super) fn shape(self) -> Shape {
+                Shape::Plain
+            }
+        }
+        impl crate::impl_::pymethods::IterOptionTag {
+            pub(super) fn shape(self) -> Shape {
+                Shape::Option
+            }
+        }
+        impl crate::impl_::pymethods::IterResultOptionTag {
+            pub(super) fn shape(self) -> Shape {
+                Shape::ResultOption
+            }
+        }
+        impl crate::impl_::pymethods::AsyncIterBaseTag {
+            pub(super) fn shape(self) -> Shape {
+                Shape::Plain
+            }
+        }
+        impl crate::impl_::pymethods::AsyncIterOptionTag {
+            pub(super) fn shape(self) -> Shape {
+                Shape::Option
+            }
+        }
+        impl crate::impl_::pymethods::AsyncIterResultOptionTag {
+            pub(super) fn shape(self) -> Shape {
+                Shape::ResultOption
+            }
+        }
+    }
+
+    /// Pins the two `__next__` / `__anext__` shape lists together: the autoref-specialized tags
+    /// that convert the returned value, and the inherent consts that give the introspection type
+    /// hint. Every shape is walked through both, so teaching one of them about a shape and not the
+    /// other fails here.
+    #[cfg(feature = "experimental-inspect")]
+    #[test]
+    fn iter_next_shapes_agree() {
+        use crate::inspect::{
+            serialize_for_introspection, serialized_len_for_introspection, PyStaticExpr,
+        };
+
+        use shape::Shape;
+
+        /// Resolves a value exactly the way the generated `__next__` / `__anext__` slots do.
+        macro_rules! runtime_shape {
+            ($value:expr) => {{
+                #[allow(unused_imports, reason = "only one tag trait applies per shape")]
+                use super::{
+                    AsyncIterBaseKind, AsyncIterOptionKind, AsyncIterResultOptionKind,
+                    IterBaseKind, IterOptionKind, IterResultOptionKind,
+                };
+                let value = $value;
+                let sync = (&value).iter_tag().shape();
+                let r#async = (&value).async_iter_tag().shape();
+                assert_eq!(
+                    sync, r#async,
+                    "`__next__` and `__anext__` disagree on a shape"
+                );
+                sync
+            }};
+        }
+
+        fn render(expr: PyStaticExpr) -> String {
+            let mut buffer = vec![0; serialized_len_for_introspection(&expr)];
+            let written = serialize_for_introspection(&expr, &mut buffer);
+            buffer.truncate(written);
+            String::from_utf8(buffer).unwrap()
+        }
+
+        let int = render(<usize as crate::IntoPyObject<'_>>::OUTPUT_TYPE);
+        let int_or_none = render(<Option<usize> as crate::IntoPyObject<'_>>::OUTPUT_TYPE);
+        // guards the assertions below against `int | None` and `int` rendering the same
+        assert_ne!(int_or_none, int);
+
+        use super::{IterNextOutput, IterNextOutputFallback as _};
+
+        // `Option<T>`: `None` is the exhaustion signal, so the hint drops it
+        assert_eq!(runtime_shape!(Option::<usize>::None), Shape::Option);
+        assert_eq!(render(IterNextOutput::<Option<usize>>::OUTPUT_TYPE), int);
+
+        // `Result<Option<T>, E>`: likewise
+        assert_eq!(
+            runtime_shape!(crate::PyResult::<Option<usize>>::Ok(None)),
+            Shape::ResultOption
+        );
+        assert_eq!(
+            render(IterNextOutput::<crate::PyResult<Option<usize>>>::OUTPUT_TYPE),
+            int
+        );
+
+        // everything else keeps its whole return type, nested `Option`s included
+        assert_eq!(runtime_shape!(0usize), Shape::Plain);
+        assert_eq!(render(IterNextOutput::<usize>::OUTPUT_TYPE), int);
+
+        assert_eq!(
+            runtime_shape!(crate::PyResult::<usize>::Ok(0)),
+            Shape::Plain
+        );
+        assert_eq!(
+            render(IterNextOutput::<crate::PyResult<usize>>::OUTPUT_TYPE),
+            int
+        );
+
+        assert_eq!(runtime_shape!(Vec::<Option<usize>>::new()), Shape::Plain);
+        assert_eq!(
+            render(IterNextOutput::<Vec<Option<usize>>>::OUTPUT_TYPE),
+            render(<Vec<Option<usize>> as crate::IntoPyObject<'_>>::OUTPUT_TYPE)
+        );
+    }
 
     #[test]
     #[cfg(any(Py_3_10, not(Py_LIMITED_API)))]

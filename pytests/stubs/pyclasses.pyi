@@ -1,5 +1,5 @@
 from _typeshed import Incomplete
-from typing import Final, final
+from typing import Any, Final, final
 
 class AssertingBaseClass:
     """
@@ -119,6 +119,36 @@ class PyClassIter:
         """
         A constructor
         """
+    def __next__(self, /) -> int: ...
+
+@final
+class PyClassOptionAsyncIter:
+    """
+    This is for demonstrating the `Option`-returning form of `__anext__`, where `None` means
+    `StopAsyncIteration` rather than a yielded `None`.
+    """
+    def __aiter__(self, /) -> PyClassOptionAsyncIter: ...
+    def __anext__(self, /) -> Any: ...
+    def __new__(cls, /) -> PyClassOptionAsyncIter: ...
+
+@final
+class PyClassOptionIter:
+    """
+    This is for demonstrating the `Option`-returning form of `__next__`, where `None` means
+    `StopIteration` rather than a yielded `None`.
+    """
+    def __iter__(self, /) -> PyClassOptionIter: ...
+    def __new__(cls, /) -> PyClassOptionIter: ...
+    def __next__(self, /) -> int: ...
+
+@final
+class PyClassResultOptionIter:
+    """
+    This is for demonstrating the fallible `Option`-returning form of `__next__`: the `Result` layer
+    carries the error, while `None` still means `StopIteration`.
+    """
+    def __iter__(self, /) -> PyClassResultOptionIter: ...
+    def __new__(cls, /) -> PyClassResultOptionIter: ...
     def __next__(self, /) -> int: ...
 
 @final
