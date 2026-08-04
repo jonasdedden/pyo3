@@ -133,6 +133,14 @@ pub fn function_introspection_code(
             } else {
                 match returns {
                     ReturnType::Default => PyExpr::builtin("None"),
+                    // `__next__` and `__anext__` encode "iteration is over" as `None`, so their
+                    // `Option` is not part of the Python-visible return type. An `async fn` returns
+                    // a coroutine from the slot instead, so its `Option` really is yielded.
+                    ReturnType::Type(_, ty) if parent.is_some() && !is_async => match name {
+                        "__next__" => PyExpr::from_iter_next_return_type(*ty, parent),
+                        "__anext__" => PyExpr::from_async_iter_next_return_type(*ty, parent),
+                        _ => PyExpr::from_return_type(*ty, parent),
+                    },
                     ReturnType::Type(_, ty) => PyExpr::from_return_type(*ty, parent),
                 }
                 .into()
