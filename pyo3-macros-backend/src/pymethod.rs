@@ -17,7 +17,7 @@ use crate::{quotes, utils};
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned, ToTokens};
 use syn::LitCStr;
-use syn::{ext::IdentExt, spanned::Spanned, Field, Ident, Result};
+use syn::{ext::IdentExt, parse_quote, spanned::Spanned, Field, Ident, Result};
 
 /// Generated code for a single pymethod item.
 pub struct MethodAndMethodDef {
@@ -1068,18 +1068,11 @@ pub const __RICHCMP__: SlotDef = SlotDef::new("Py_tp_richcompare", "richcmpfunc"
 const __GET__: SlotDef = SlotDef::new("Py_tp_descr_get", "descrgetfunc");
 const __ITER__: SlotDef = SlotDef::new("Py_tp_iter", "getiterfunc");
 const __NEXT__: SlotDef = SlotDef::new("Py_tp_iternext", "iternextfunc")
-    .return_specialized_conversion(
-        TokenGenerator(|_| quote! { IterBaseKind, IterOptionKind, IterResultOptionKind }),
-        TokenGenerator(|_| quote! { iter_tag }),
-    );
+    .return_iter_conversion(TokenGenerator(|_| quote! { IterNext }));
 const __AWAIT__: SlotDef = SlotDef::new("Py_am_await", "unaryfunc");
 const __AITER__: SlotDef = SlotDef::new("Py_am_aiter", "unaryfunc");
-const __ANEXT__: SlotDef = SlotDef::new("Py_am_anext", "unaryfunc").return_specialized_conversion(
-    TokenGenerator(
-        |_| quote! { AsyncIterBaseKind, AsyncIterOptionKind, AsyncIterResultOptionKind },
-    ),
-    TokenGenerator(|_| quote! { async_iter_tag }),
-);
+const __ANEXT__: SlotDef = SlotDef::new("Py_am_anext", "unaryfunc")
+    .return_iter_conversion(TokenGenerator(|_| quote! { AsyncIterNext }));
 pub const __LEN__: SlotDef = SlotDef::new("Py_mp_length", "lenfunc");
 const __CONTAINS__: SlotDef = SlotDef::new("Py_sq_contains", "objobjproc");
 const __CONCAT__: SlotDef = SlotDef::new("Py_sq_concat", "binaryfunc");
@@ -1267,14 +1260,50 @@ fn extract_object(
     quote!(#extracted)
 }
 
+/// The `impl_::pymethods::IterNextKind` of a `__next__` / `__anext__` return type, as a const
+/// generic argument.
+///
+/// This is the only classification of the return type: the conversion picked here and the
+/// `experimental-inspect` type hint are both keyed on it, so a shape cannot be treated as
+/// `Option`-encoded by one and not the other.
+fn iter_next_kind(spec: &FnSpec<'_>, ctx: &Ctx) -> TokenStream {
+    let Ctx { pyo3_path, .. } = ctx;
+    if spec.asyncness.is_some() {
+        // an `async fn` hands the slot a coroutine, not the declared return type, so its `Option`
+        // is inside the awaited value and really is a yielded `None`
+        return quote! { { #pyo3_path::impl_::pymethods::iter_next_kind::PLAIN } };
+    }
+    let ty = match &spec.output {
+        syn::ReturnType::Default => parse_quote! { () },
+        syn::ReturnType::Type(_, ty) => {
+            // named lifetimes may not appear in a const expression, and the classification does not
+            // care about them anyway
+            let mut ty = (**ty).clone();
+            crate::utils::elide_lifetimes(&mut ty);
+            ty
+        }
+    };
+    quote! {{
+        #[allow(
+            unused_imports,
+            reason = "the fallback trait is unused when an inherent const applies"
+        )]
+        use #pyo3_path::impl_::pymethods::IterNextKindFallback as _;
+        #pyo3_path::impl_::pymethods::IterNextKind::<#ty>::KIND
+    }}
+}
+
 enum ReturnMode {
     ReturnSelf,
     Conversion(TokenGenerator),
-    SpecializedConversion(TokenGenerator, TokenGenerator),
+    /// `__next__` / `__anext__`: the conversion is const-generic over the
+    /// `impl_::pymethods::IterNextKind` of the declared return type, so that it and the
+    /// introspection type hint agree on which shapes spell exhaustion as `None`.
+    IterConversion(TokenGenerator),
 }
 
 impl ReturnMode {
-    fn return_call_output(&self, call: TokenStream, ctx: &Ctx) -> TokenStream {
+    fn return_call_output(&self, call: TokenStream, spec: &FnSpec<'_>, ctx: &Ctx) -> TokenStream {
         let Ctx { pyo3_path, .. } = ctx;
         match self {
             ReturnMode::Conversion(conversion) => {
@@ -1284,13 +1313,12 @@ impl ReturnMode {
                     #pyo3_path::impl_::callback::convert(py, _result)
                 }
             }
-            ReturnMode::SpecializedConversion(traits, tag) => {
-                let traits = TokenGeneratorCtx(*traits, ctx);
-                let tag = TokenGeneratorCtx(*tag, ctx);
+            ReturnMode::IterConversion(converter) => {
+                let converter = TokenGeneratorCtx(*converter, ctx);
+                let kind = iter_next_kind(spec, ctx);
                 quote! {
                     let _result = #call;
-                    use #pyo3_path::impl_::pymethods::{#traits};
-                    (&_result).#tag().convert(py, _result)
+                    #pyo3_path::impl_::pymethods::#converter::<#kind>::convert(py, _result)
                 }
             }
             ReturnMode::ReturnSelf => quote! {
@@ -1392,12 +1420,8 @@ impl SlotDef {
         self
     }
 
-    const fn return_specialized_conversion(
-        mut self,
-        traits: TokenGenerator,
-        tag: TokenGenerator,
-    ) -> Self {
-        self.return_mode = Some(ReturnMode::SpecializedConversion(traits, tag));
+    const fn return_iter_conversion(mut self, converter: TokenGenerator) -> Self {
+        self.return_mode = Some(ReturnMode::IterConversion(converter));
         self
     }
 
@@ -1603,7 +1627,7 @@ fn generate_method_body(
             let args = self_arg.into_iter().chain(args);
             let call = quote! { #cls::#rust_name(#(#args),*) };
             let result = if let Some(return_mode) = return_mode {
-                return_mode.return_call_output(call, ctx)
+                return_mode.return_call_output(call, spec, ctx)
             } else {
                 quote! {
                     let result = #call;

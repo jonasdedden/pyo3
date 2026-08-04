@@ -20,6 +20,9 @@ pub enum PyExpr {
     ArgumentType(Type),
     /// The Python type matching the given Rust type given as a function returned value
     ReturnType(Type),
+    /// The Python type `__next__` / `__anext__` yields, with the `Option`-means-"iteration is over"
+    /// encoding stripped
+    IterNextReturnType(Type),
     /// The Python type matching the given Rust type
     Type(Type),
     /// A name
@@ -105,6 +108,17 @@ impl PyExpr {
     /// If self_type is set, self_type will replace Self in the given type
     pub fn from_return_type(t: Type, self_type: Option<&Type>) -> Self {
         Self::ReturnType(clean_type(t, self_type))
+    }
+
+    /// The type hint of the Rust type used as the output type of `__next__` or of a non-`async`
+    /// `__anext__`.
+    ///
+    /// `-> Option<T>` and `-> PyResult<Option<T>>` both yield `T`: `None` is how PyO3 spells
+    /// `StopIteration` / `StopAsyncIteration`, which is not a value Python ever sees.
+    ///
+    /// If self_type is set, self_type will replace Self in the given type
+    pub fn from_iter_next_return_type(t: Type, self_type: Option<&Type>) -> Self {
+        Self::IterNextReturnType(clean_type(t, self_type))
     }
 
     /// The type hint of the Rust type `PyTypeCheck` trait.
@@ -203,6 +217,22 @@ impl PyExpr {
                         <#t as #pyo3_crate_path::impl_::introspection::PyReturnType>::OUTPUT_TYPE
                     };
                     TYPE
+                }}
+            }
+            Self::IterNextReturnType(t) => {
+                // Goes through the very same `IterNextKind` classification the slot conversion uses,
+                // so the stub and the runtime cannot disagree about which shapes spell exhaustion
+                // as `None`.
+                quote! {{
+                    #[allow(
+                        unused_imports,
+                        reason = "the fallback trait is unused when an inherent const applies"
+                    )]
+                    use #pyo3_crate_path::impl_::pymethods::IterNextKindFallback as _;
+                    #pyo3_crate_path::impl_::pymethods::IterNextOutputType::<
+                        #t,
+                        { #pyo3_crate_path::impl_::pymethods::IterNextKind::<#t>::KIND },
+                    >::OUTPUT_TYPE
                 }}
             }
             Self::Type(t) => {
