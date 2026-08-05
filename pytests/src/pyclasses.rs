@@ -50,6 +50,108 @@ impl PyClassIter {
     }
 }
 
+/// This is for demonstrating the `Option`-returning form of `__next__`, where `None` means
+/// `StopIteration` rather than a yielded `None`.
+#[pyclass]
+#[derive(Default)]
+struct PyClassOptionIter {
+    count: usize,
+}
+
+#[pymethods]
+impl PyClassOptionIter {
+    #[new]
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&mut self) -> Option<usize> {
+        if self.count < 5 {
+            self.count += 1;
+            Some(self.count)
+        } else {
+            None
+        }
+    }
+}
+
+/// This is for demonstrating the fallible `Option`-returning form of `__next__`: the `Result` layer
+/// carries the error, while `None` still means `StopIteration`.
+#[pyclass]
+#[derive(Default)]
+struct PyClassResultOptionIter {
+    count: usize,
+}
+
+#[pymethods]
+impl PyClassResultOptionIter {
+    #[new]
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "the `Result<Option<_>, _>` shape is what this class exists to cover"
+    )]
+    fn __next__(&mut self) -> PyResult<Option<usize>> {
+        if self.count < 5 {
+            self.count += 1;
+            Ok(Some(self.count))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+/// This is for demonstrating the `Option`-returning form of `__anext__`, where `None` means
+/// `StopAsyncIteration` rather than a yielded `None`.
+#[pyclass]
+#[derive(Default)]
+struct PyClassOptionAsyncIter {
+    count: usize,
+}
+
+#[pymethods]
+impl PyClassOptionAsyncIter {
+    #[new]
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __anext__(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        if self.count < 5 {
+            self.count += 1;
+            // `__anext__` has to hand back an awaitable; a finished future is the simplest one.
+            Ok(Some(finished_future(py, self.count)?))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+/// A future which is already resolved to `value`, so that `await`ing it never suspends.
+fn finished_future(py: Python<'_>, value: usize) -> PyResult<Py<PyAny>> {
+    let future = py
+        .import("asyncio")?
+        .call_method0("get_event_loop")?
+        .call_method0("create_future")?;
+    future.call_method1("set_result", (value,))?;
+    Ok(future.unbind())
+}
+
 #[pyclass]
 #[derive(Default)]
 struct PyClassThreadIter {
@@ -341,6 +443,7 @@ pub mod pyclasses {
     #[pymodule_export]
     use super::{
         map_a_class, AssertingBaseClass, ClassWithDecorators, ClassWithoutConstructor, EmptyClass,
-        Number, PlainObject, PyClassIter, PyClassThreadIter,
+        Number, PlainObject, PyClassIter, PyClassOptionAsyncIter, PyClassOptionIter,
+        PyClassResultOptionIter, PyClassThreadIter,
     };
 }
