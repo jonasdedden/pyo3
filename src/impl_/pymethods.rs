@@ -3,9 +3,13 @@
 
 use crate::exceptions::PyStopAsyncIteration;
 use crate::impl_::callback::IntoPyCallbackOutput;
+#[cfg(feature = "experimental-inspect")]
+use crate::impl_::introspection::PyReturnType;
 use crate::impl_::panic::PanicTrap;
 use crate::impl_::pycell::PyClassObjectBaseLayout;
 use crate::impl_::pyclass::PyClassDict as _;
+#[cfg(feature = "experimental-inspect")]
+use crate::inspect::PyStaticExpr;
 use crate::internal::get_slot::{get_slot, TP_BASE, TP_CLEAR, TP_TRAVERSE};
 use crate::internal::pyclass_init::PyClassInit;
 use crate::internal::state::ForbidAttaching;
@@ -610,167 +614,137 @@ unsafe fn call_super_clear(
     0
 }
 
-// Autoref-based specialization for handling `__next__` returning `Option`
+// `__next__` and `__anext__` may spell "iteration is over" as `None` instead of yielding it. Which
+// return types carry that encoding is decided in exactly one place, `IterNextKind` below; the slot
+// conversion and the `experimental-inspect` type hint are both const-generic over the resulting
+// `KIND`, so neither can grow an opinion of its own about a shape.
 
-pub struct IterBaseTag;
-
-impl IterBaseTag {
-    #[inline]
-    pub fn convert<'py, Value, Target>(self, py: Python<'py>, value: Value) -> PyResult<Target>
-    where
-        Value: IntoPyCallbackOutput<'py, Target>,
-    {
-        value.convert(py)
-    }
+/// The ways a `__next__` / `__anext__` return type can spell "iteration is over".
+pub mod iter_next_kind {
+    /// The return type does not encode exhaustion, so the value is converted as-is.
+    pub const PLAIN: u8 = 0;
+    /// `Option<T>`: `None` ends the iteration.
+    pub const OPTION: u8 = 1;
+    /// `Result<Option<T>, E>`: `Ok(None)` ends the iteration.
+    pub const RESULT_OPTION: u8 = 2;
 }
 
-pub trait IterBaseKind {
-    #[inline]
-    fn iter_tag(&self) -> IterBaseTag {
-        IterBaseTag
-    }
+/// Classifies a `__next__` / `__anext__` return type into an [`iter_next_kind`] constant.
+///
+/// The inherent consts cover the shapes which encode exhaustion as `None` and take priority over
+/// [`IterNextKindFallback`], which covers everything else.
+pub struct IterNextKind<T>(PhantomData<T>);
+
+/// The kind of every return type not listed as an inherent impl of [`IterNextKind`].
+pub trait IterNextKindFallback {
+    const KIND: u8;
 }
 
-impl<Value> IterBaseKind for &Value {}
+impl<T> IterNextKindFallback for IterNextKind<T> {
+    const KIND: u8 = iter_next_kind::PLAIN;
+}
 
-pub struct IterOptionTag;
+impl<T> IterNextKind<Option<T>> {
+    pub const KIND: u8 = iter_next_kind::OPTION;
+}
 
-impl IterOptionTag {
-    #[inline]
-    pub fn convert<'py, Value>(
-        self,
-        py: Python<'py>,
-        value: Option<Value>,
-    ) -> PyResult<*mut ffi::PyObject>
-    where
-        Value: IntoPyCallbackOutput<'py, *mut ffi::PyObject>,
-    {
-        match value {
-            Some(value) => value.convert(py),
-            None => Ok(null_mut()),
+impl<T, E> IterNextKind<Result<Option<T>, E>> {
+    pub const KIND: u8 = iter_next_kind::RESULT_OPTION;
+}
+
+/// Converts what `__next__` / `__anext__` returned, given the [`IterNextKind`] of its type.
+macro_rules! iter_next_convert {
+    (
+        $(#[$meta:meta])*
+        $name:ident, exhausted: $exhausted:expr $(,)?
+    ) => {
+        $(#[$meta])*
+        pub struct $name<const KIND: u8>;
+
+        impl $name<{ iter_next_kind::PLAIN }> {
+            #[inline]
+            pub fn convert<'py, Value, Target>(py: Python<'py>, value: Value) -> PyResult<Target>
+            where
+                Value: IntoPyCallbackOutput<'py, Target>,
+            {
+                value.convert(py)
+            }
         }
-    }
-}
 
-pub trait IterOptionKind {
-    #[inline]
-    fn iter_tag(&self) -> IterOptionTag {
-        IterOptionTag
-    }
-}
-
-impl<Value> IterOptionKind for Option<Value> {}
-
-pub struct IterResultOptionTag;
-
-impl IterResultOptionTag {
-    #[inline]
-    pub fn convert<'py, Value, Error>(
-        self,
-        py: Python<'py>,
-        value: Result<Option<Value>, Error>,
-    ) -> PyResult<*mut ffi::PyObject>
-    where
-        Value: IntoPyCallbackOutput<'py, *mut ffi::PyObject>,
-        Error: Into<PyErr>,
-    {
-        match value {
-            Ok(Some(value)) => value.convert(py),
-            Ok(None) => Ok(null_mut()),
-            Err(err) => Err(err.into()),
+        impl $name<{ iter_next_kind::OPTION }> {
+            #[inline]
+            pub fn convert<'py, Value>(
+                py: Python<'py>,
+                value: Option<Value>,
+            ) -> PyResult<*mut ffi::PyObject>
+            where
+                Value: IntoPyCallbackOutput<'py, *mut ffi::PyObject>,
+            {
+                match value {
+                    Some(value) => value.convert(py),
+                    None => $exhausted,
+                }
+            }
         }
-    }
-}
 
-pub trait IterResultOptionKind {
-    #[inline]
-    fn iter_tag(&self) -> IterResultOptionTag {
-        IterResultOptionTag
-    }
-}
-
-impl<Value, Error> IterResultOptionKind for Result<Option<Value>, Error> {}
-
-// Autoref-based specialization for handling `__anext__` returning `Option`
-
-pub struct AsyncIterBaseTag;
-
-impl AsyncIterBaseTag {
-    #[inline]
-    pub fn convert<'py, Value, Target>(self, py: Python<'py>, value: Value) -> PyResult<Target>
-    where
-        Value: IntoPyCallbackOutput<'py, Target>,
-    {
-        value.convert(py)
-    }
-}
-
-pub trait AsyncIterBaseKind {
-    #[inline]
-    fn async_iter_tag(&self) -> AsyncIterBaseTag {
-        AsyncIterBaseTag
-    }
-}
-
-impl<Value> AsyncIterBaseKind for &Value {}
-
-pub struct AsyncIterOptionTag;
-
-impl AsyncIterOptionTag {
-    #[inline]
-    pub fn convert<'py, Value>(
-        self,
-        py: Python<'py>,
-        value: Option<Value>,
-    ) -> PyResult<*mut ffi::PyObject>
-    where
-        Value: IntoPyCallbackOutput<'py, *mut ffi::PyObject>,
-    {
-        match value {
-            Some(value) => value.convert(py),
-            None => Err(PyStopAsyncIteration::new_err(())),
+        impl $name<{ iter_next_kind::RESULT_OPTION }> {
+            #[inline]
+            pub fn convert<'py, Value, Error>(
+                py: Python<'py>,
+                value: Result<Option<Value>, Error>,
+            ) -> PyResult<*mut ffi::PyObject>
+            where
+                Value: IntoPyCallbackOutput<'py, *mut ffi::PyObject>,
+                Error: Into<PyErr>,
+            {
+                match value {
+                    Ok(Some(value)) => value.convert(py),
+                    Ok(None) => $exhausted,
+                    Err(err) => Err(err.into()),
+                }
+            }
         }
-    }
+    };
 }
 
-pub trait AsyncIterOptionKind {
-    #[inline]
-    fn async_iter_tag(&self) -> AsyncIterOptionTag {
-        AsyncIterOptionTag
-    }
+iter_next_convert!(
+    /// Conversion of what `__next__` returned.
+    IterNext,
+    exhausted: Ok(null_mut()),
+);
+
+iter_next_convert!(
+    /// Conversion of what a plain (non-`async`) `__anext__` returned.
+    ///
+    /// An `async fn __anext__` returns a coroutine from the slot, so its `Option` sits inside the
+    /// awaited value and is a yielded `None`; such a slot is `PLAIN`.
+    AsyncIterNext,
+    exhausted: Err(PyStopAsyncIteration::new_err(())),
+);
+
+/// The Python type `__next__` / `__anext__` yields, given the [`IterNextKind`] of its return type.
+///
+/// The `KIND` makes the shape unambiguous, so the stub says `T` exactly when the conversion above
+/// treats `None` as the end of the iteration.
+#[cfg(feature = "experimental-inspect")]
+pub struct IterNextOutputType<T, const KIND: u8>(PhantomData<T>);
+
+#[cfg(feature = "experimental-inspect")]
+impl<T: PyReturnType> IterNextOutputType<T, { iter_next_kind::PLAIN }> {
+    pub const OUTPUT_TYPE: PyStaticExpr = <T as PyReturnType>::OUTPUT_TYPE;
 }
 
-impl<Value> AsyncIterOptionKind for Option<Value> {}
-
-pub struct AsyncIterResultOptionTag;
-
-impl AsyncIterResultOptionTag {
-    #[inline]
-    pub fn convert<'py, Value, Error>(
-        self,
-        py: Python<'py>,
-        value: Result<Option<Value>, Error>,
-    ) -> PyResult<*mut ffi::PyObject>
-    where
-        Value: IntoPyCallbackOutput<'py, *mut ffi::PyObject>,
-        Error: Into<PyErr>,
-    {
-        match value {
-            Ok(Some(value)) => value.convert(py),
-            Ok(None) => Err(PyStopAsyncIteration::new_err(())),
-            Err(err) => Err(err.into()),
-        }
-    }
+#[cfg(feature = "experimental-inspect")]
+impl<T: PyReturnType> IterNextOutputType<Option<T>, { iter_next_kind::OPTION }> {
+    pub const OUTPUT_TYPE: PyStaticExpr = <T as PyReturnType>::OUTPUT_TYPE;
 }
 
-pub trait AsyncIterResultOptionKind {
-    #[inline]
-    fn async_iter_tag(&self) -> AsyncIterResultOptionTag {
-        AsyncIterResultOptionTag
-    }
+#[cfg(feature = "experimental-inspect")]
+impl<T: PyReturnType, E>
+    IterNextOutputType<Result<Option<T>, E>, { iter_next_kind::RESULT_OPTION }>
+{
+    pub const OUTPUT_TYPE: PyStaticExpr = <T as PyReturnType>::OUTPUT_TYPE;
 }
-
-impl<Value, Error> AsyncIterResultOptionKind for Result<Option<Value>, Error> {}
 
 /// Re-exported so that `#[new]` generated code can resolve the type tag for `tp_new_impl`
 pub use crate::internal::pyclass_init::tp_new_resolver;
@@ -798,6 +772,68 @@ where
 mod tests {
     #[allow(unused_imports, reason = "conditionally used")]
     use crate::platform::prelude::*;
+
+    /// The type hints resolved by [`super::IterNextOutputType`], which are what the generated stubs
+    /// use for `__next__` / `__anext__`.
+    #[test]
+    #[cfg(feature = "experimental-inspect")]
+    fn iter_next_output_type_strips_the_stop_encoding() {
+        use super::{iter_next_kind, IterNextKind, IterNextKindFallback as _, IterNextOutputType};
+        use crate::inspect::{
+            serialize_for_introspection, serialized_len_for_introspection, PyStaticExpr,
+        };
+
+        fn render(expr: PyStaticExpr) -> String {
+            let mut buffer = vec![0; serialized_len_for_introspection(&expr)];
+            let written = serialize_for_introspection(&expr, &mut buffer);
+            buffer.truncate(written);
+            String::from_utf8(buffer).unwrap()
+        }
+
+        let int = render(<usize as crate::IntoPyObject<'_>>::OUTPUT_TYPE);
+        let int_or_none = render(<Option<usize> as crate::IntoPyObject<'_>>::OUTPUT_TYPE);
+        // guards the assertions below against `int | None` and `int` rendering the same
+        assert_ne!(int_or_none, int);
+
+        // the shapes are classified once, and the type hint is keyed on that classification
+        assert_eq!(IterNextKind::<Option<usize>>::KIND, iter_next_kind::OPTION);
+        assert_eq!(
+            IterNextKind::<crate::PyResult<Option<usize>>>::KIND,
+            iter_next_kind::RESULT_OPTION
+        );
+        assert_eq!(IterNextKind::<usize>::KIND, iter_next_kind::PLAIN);
+        assert_eq!(
+            IterNextKind::<crate::PyResult<usize>>::KIND,
+            iter_next_kind::PLAIN
+        );
+
+        // `Option` is the `StopIteration` / `StopAsyncIteration` encoding, not a yielded value
+        assert_eq!(
+            render(IterNextOutputType::<Option<usize>, { iter_next_kind::OPTION }>::OUTPUT_TYPE),
+            int
+        );
+        assert_eq!(
+            render(
+                IterNextOutputType::<
+                    crate::PyResult<Option<usize>>,
+                    { iter_next_kind::RESULT_OPTION },
+                >::OUTPUT_TYPE
+            ),
+            int
+        );
+
+        // every other shape keeps the whole return type, `Option` included
+        assert_eq!(
+            render(IterNextOutputType::<usize, { iter_next_kind::PLAIN }>::OUTPUT_TYPE),
+            int
+        );
+        assert_eq!(
+            render(
+                IterNextOutputType::<Vec<Option<usize>>, { iter_next_kind::PLAIN }>::OUTPUT_TYPE
+            ),
+            render(<Vec<Option<usize>> as crate::IntoPyObject<'_>>::OUTPUT_TYPE)
+        );
+    }
 
     #[test]
     #[cfg(any(Py_3_10, not(Py_LIMITED_API)))]
