@@ -1,3 +1,4 @@
+import asyncio
 import platform
 import sys
 
@@ -52,6 +53,31 @@ def test_iter():
     with pytest.raises(StopIteration) as excinfo:
         next(i)
     assert excinfo.value.value == "Ended"
+
+
+@pytest.mark.parametrize(
+    "cls", [pyclasses.PyClassOptionIter, pyclasses.PyClassResultOptionIter]
+)
+def test_option_iter(cls):
+    """`__next__ -> Option<usize>` and `__next__ -> PyResult<Option<usize>>` both stop on `None`
+    rather than yielding it, which is why the generated stubs say `-> int` and not `-> int | None`."""
+    assert list(cls()) == [1, 2, 3, 4, 5]
+
+    i = cls()
+    for _ in range(5):
+        next(i)
+    with pytest.raises(StopIteration):
+        next(i)
+
+
+def test_option_async_iter():
+    """Same for `__anext__ -> PyResult<Option<_>>`: `None` raises `StopAsyncIteration`, so the stub
+    says `-> Any` and not `-> Any | None`."""
+
+    async def collect():
+        return [value async for value in pyclasses.PyClassOptionAsyncIter()]
+
+    assert asyncio.run(collect()) == [1, 2, 3, 4, 5]
 
 
 @pytest.mark.skipif(
