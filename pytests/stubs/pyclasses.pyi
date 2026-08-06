@@ -1,5 +1,6 @@
+from .awaitable import IterAwaitable
 from _typeshed import Incomplete
-from typing import Any, Final, final
+from typing import Final, final
 
 class AssertingBaseClass:
     """
@@ -127,7 +128,7 @@ class PyClassOptionAsyncIter:
     This is for demonstrating how to stop iteration by returning `None` from __anext__
     """
     def __aiter__(self, /) -> PyClassOptionAsyncIter: ...
-    def __anext__(self, /) -> Any: ...
+    def __anext__(self, /) -> IterAwaitable: ...
     def __new__(cls, /) -> PyClassOptionAsyncIter: ...
 
 @final

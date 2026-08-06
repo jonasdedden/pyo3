@@ -7,6 +7,8 @@ use pyo3::types::{PyComplex, PyType};
 #[cfg(not(any(Py_LIMITED_API, GraalPy)))]
 use pyo3::types::{PyDict, PyTuple};
 
+use crate::awaitable::awaitable::IterAwaitable;
+
 #[pyclass(from_py_object)]
 #[derive(Clone, Default)]
 pub struct EmptyClass {}
@@ -125,18 +127,14 @@ impl PyClassOptionAsyncIter {
         slf
     }
 
-    fn __anext__(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+    fn __anext__(&mut self, py: Python<'_>) -> PyResult<Option<IterAwaitable>> {
         if self.count >= 5 {
             return Ok(None);
         }
         self.count += 1;
-        // `__anext__` hands back an awaitable; an already resolved future is the simplest one.
-        let future = py
-            .import("asyncio")?
-            .call_method0("get_running_loop")?
-            .call_method0("create_future")?;
-        future.call_method1("set_result", (self.count,))?;
-        Ok(Some(future.unbind()))
+        // `__anext__` hands back an awaitable, which `async for` awaits for the next value.
+        let value = self.count.into_pyobject(py)?.into_any().unbind();
+        Ok(Some(IterAwaitable::new(value)))
     }
 }
 

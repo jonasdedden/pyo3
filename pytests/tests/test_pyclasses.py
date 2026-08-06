@@ -1,9 +1,12 @@
 import asyncio
 import platform
 import sys
+from collections.abc import Iterator
 
 import pytest
 from pyo3_pytests import pyclasses
+from pyo3_pytests.awaitable import IterAwaitable
+from typing_extensions import assert_type
 
 
 def test_empty_class_init(benchmark):
@@ -59,8 +62,6 @@ def test_iter():
     "cls", [pyclasses.PyClassOptionIter, pyclasses.PyClassResultOptionIter]
 )
 def test_option_iter(cls):
-    # `None` stops the iteration rather than being yielded, which is why the stubs for these
-    # classes say `-> int` and not `-> int | None`
     assert list(cls()) == [1, 2, 3, 4, 5]
 
     i = cls()
@@ -75,6 +76,18 @@ def test_option_async_iter():
         return [value async for value in pyclasses.PyClassOptionAsyncIter()]
 
     assert asyncio.run(collect()) == [1, 2, 3, 4, 5]
+
+
+def test_option_iter_type_hints() -> None:
+    # `None` stops the iteration rather than being yielded, so these classes are `Iterator[int]`
+    # and not `Iterator[int | None]`
+    plain: Iterator[int] = pyclasses.PyClassOptionIter()
+    fallible: Iterator[int] = pyclasses.PyClassResultOptionIter()
+    assert_type(next(plain), int)
+    assert_type(next(fallible), int)
+
+    # `__anext__` likewise hands back the awaitable itself, not `IterAwaitable | None`
+    assert_type(pyclasses.PyClassOptionAsyncIter().__anext__(), IterAwaitable)
 
 
 @pytest.mark.skipif(
