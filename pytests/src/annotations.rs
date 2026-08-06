@@ -18,6 +18,12 @@ pub mod annotations {
         a
     }
 
+    /// Annotations naming something outside `builtins` have to be imported by the stub
+    #[pyfunction(signature = (when: "datetime.date") -> "datetime.date | None")]
+    fn with_imported_type_annotations(when: Bound<'_, PyAny>) -> Bound<'_, PyAny> {
+        when
+    }
+
     #[pyfunction]
     fn cross_module_imports(_a: &EmptyClass) {}
 }

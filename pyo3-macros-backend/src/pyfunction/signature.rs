@@ -237,24 +237,42 @@ impl ToTokens for SignatureItemPosargsSep {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PyTypeAnnotation(syn::LitStr);
+pub struct PyTypeAnnotation {
+    literal: syn::LitStr,
+    /// Parsed upfront so that the names it mentions reach the stub generator, which needs them to
+    /// emit the matching imports
+    #[cfg(feature = "experimental-inspect")]
+    type_hint: Box<PyExpr>,
+}
 
 impl Parse for PyTypeAnnotation {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        Ok(Self(input.parse()?))
+        let literal: syn::LitStr = input.parse()?;
+        Ok(Self {
+            #[cfg(feature = "experimental-inspect")]
+            type_hint: Box::new(crate::py_expr::parse_type_hint(&literal.value()).map_err(
+                |message| {
+                    syn::Error::new(
+                        literal.span(),
+                        format!("invalid Python type hint: {message}"),
+                    )
+                },
+            )?),
+            literal,
+        })
     }
 }
 
 impl ToTokens for PyTypeAnnotation {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        self.0.to_tokens(tokens);
+        self.literal.to_tokens(tokens);
     }
 }
 
 impl PyTypeAnnotation {
     #[cfg(feature = "experimental-inspect")]
     pub fn as_type_hint(&self) -> PyExpr {
-        PyExpr::str_constant(self.0.value())
+        (*self.type_hint).clone()
     }
 }
 

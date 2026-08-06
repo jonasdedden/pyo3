@@ -1,0 +1,13 @@
+error: invalid Python type hint: unexpected `int`
+ --> tests/ui/invalid_type_hint.rs:8:24
+  |
+8 | #[pyo3(signature = (x: "int int"))]
+  |                        ^^^^^^^^^
+
+error: invalid Python type hint: expected `]`, found the end of the type hint
+  --> tests/ui/invalid_type_hint.rs:15:26
+   |
+15 | #[pyo3(signature = () -> "list[int")]
+   |                          ^^^^^^^^^^
+
+error: aborting due to 2 previous errors

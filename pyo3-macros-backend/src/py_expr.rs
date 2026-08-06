@@ -1,5 +1,9 @@
 //! Define a data structure for Python type hints, mixing static data from macros and call to Pyo3 constants.
 
+mod parse;
+
+pub use self::parse::parse_type_hint;
+
 use crate::utils::PyO3CratePath;
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -39,6 +43,8 @@ pub enum PyExpr {
     },
     /// A tuple
     Tuple { elts: Vec<Self> },
+    /// A list
+    List { elts: Vec<Self> },
     /// A subscript `value[slice]`
     Subscript { value: Box<Self>, slice: Box<Self> },
     /// A constant
@@ -256,6 +262,12 @@ impl PyExpr {
                 let value = value.to_introspection_token_stream(pyo3_crate_path);
                 let slice = slice.to_introspection_token_stream(pyo3_crate_path);
                 quote! { #pyo3_crate_path::inspect::PyStaticExpr::Subscript { value: &#value, slice: &#slice } }
+            }
+            Self::List { elts } => {
+                let elts = elts
+                    .iter()
+                    .map(|e| e.to_introspection_token_stream(pyo3_crate_path));
+                quote! { #pyo3_crate_path::inspect::PyStaticExpr::List { elts: &[#(#elts),*] } }
             }
             Self::Tuple { elts } => {
                 let elts = elts

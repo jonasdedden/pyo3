@@ -68,11 +68,12 @@ class Class:
     def __ne__(self, value: object, /) -> bool: ...
 
 
-def list_of_int_identity(arg: "list[int]") -> "list[int]": ...
+def list_of_int_identity(arg: list[int]) -> list[int]: ...
 ```
 
 The only piece of new syntax is that the `#[pyo3(signature = ...)]` attribute can contain type annotations like `#[pyo3(signature = (arg: "list[int]") -> "list[int]")]` (note the `""` around type annotations).
 This is useful when PyO3 is not able to derive proper type annotations by itself.
+An annotation may name anything importable, like `"datetime.date"`; the import it needs is added to the stub.
 
 To generate stubs file with `maturin` you can use `maturin generate-stubs --output stubs` that will build the project then generate the stubs in the `stubs` directory.
 You can also directly integrate the stubs in the built wheels by doing `maturin build --generate-stubs` (works also with `maturin develop`).
