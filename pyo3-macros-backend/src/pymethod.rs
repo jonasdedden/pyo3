@@ -8,7 +8,7 @@ use crate::method::{
     CallingConvention, ClassMethodReceiver, ExtractErrorMode, PyArg, SelfConversionPolicy,
 };
 use crate::params::{impl_arg_params, impl_regular_arg_param, Holders};
-use crate::pyfunction::WarningFactory;
+use crate::pyfunction::{SignatureItem, WarningFactory};
 use crate::utils::PythonDoc;
 use crate::utils::{Ctx, StaticIdent};
 use crate::{
@@ -373,9 +373,26 @@ fn ensure_no_forbidden_protocol_attributes(
     method_name: &str,
 ) -> syn::Result<()> {
     if let Some(signature) = &spec.signature.attribute {
-        // __new__, __init__ and __call__ are allowed to have a signature, but nothing else is.
+        // `__new__`, `__init__` and `__call__` take their arguments from Python and so accept any
+        // signature. Every other magic method fills a slot, which CPython calls with a fixed set of
+        // positional arguments: there a `signature` can annotate those arguments and the return
+        // type, but not change them.
         if !proto_kind.takes_args_and_kwargs() {
-            bail_spanned!(signature.kw.span() => format!("`signature` cannot be used with magic method `{}`", method_name));
+            for item in &signature.value.items {
+                let unsupported = match item {
+                    // an argument still has to be named to be annotated, or to reach the `->`
+                    SignatureItem::Argument(argument) => {
+                        argument.eq_and_default.as_ref().map(|(eq, _)| eq.span())
+                    }
+                    SignatureItem::PosargsSep(_) => None,
+                    SignatureItem::VarargsSep(_)
+                    | SignatureItem::Varargs(_)
+                    | SignatureItem::Kwargs(_) => Some(item.span()),
+                };
+                if let Some(span) = unsupported {
+                    bail_spanned!(span => format!("`signature` can only annotate the arguments of magic method `{}`", method_name));
+                }
+            }
         }
     }
     if let Some(text_signature) = &spec.text_signature {

@@ -10,17 +10,23 @@ error: Expected 1 arguments, got 0
 28 |     fn truediv_expects_one_argument_py(&self, _py: Python<'_>) -> PyResult<()> {
    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-error: `signature` cannot be used with magic method `__bool__`
-  --> tests/ui/invalid_proto_pymethods.rs:40:31
+error: `signature` can only annotate the arguments of magic method `__truediv__`
+  --> tests/ui/invalid_proto_pymethods.rs:40:53
    |
-40 |     #[pyo3(name = "__bool__", signature = ())]
-   |                               ^^^^^^^^^
+40 |     #[pyo3(name = "__truediv__", signature = (other = 1))]
+   |                                                     ^
 
 error: `text_signature` cannot be used with magic method `__bool__`
   --> tests/ui/invalid_proto_pymethods.rs:49:31
    |
 49 |     #[pyo3(name = "__bool__", text_signature = "")]
    |                               ^^^^^^^^^^^^^^
+
+error: `signature` can only annotate the arguments of magic method `__mod__`
+  --> tests/ui/invalid_proto_pymethods.rs:75:43
+   |
+75 |     #[pyo3(name = "__mod__", signature = (*args))]
+   |                                           ^
 
 error[E0592]: duplicate definitions with name `__pymethod___richcmp____`
   --> tests/ui/invalid_proto_pymethods.rs:59:1
@@ -69,7 +75,7 @@ note: candidate #2 is defined in an impl for the type `EqAndRichcmp`
    | ^^^^^^^^^^^^
    = note: this error originates in the macro `::pyo3::impl_::pyclass::generate_pyclass_richcompare_slot` which comes from the expansion of the attribute macro `pymethods` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error: aborting due to 7 previous errors
+error: aborting due to 8 previous errors
 
 Some errors have detailed explanations: E0034, E0592.
 For more information about an error, try `rustc --explain E0034`.

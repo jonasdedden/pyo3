@@ -75,6 +75,26 @@ The only piece of new syntax is that the `#[pyo3(signature = ...)]` attribute ca
 This is useful when PyO3 is not able to derive proper type annotations by itself.
 An annotation may name anything importable, like `"datetime.date"`; the import it needs is added to the stub.
 
+A magic method may also be annotated this way.
+Its arguments are fixed by the slot it fills, so there `signature` can annotate them and the return type but not change them:
+
+```rust
+# use pyo3::prelude::*;
+# #[pyclass]
+# struct Waiter { value: usize }
+#[pymethods]
+impl Waiter {
+    #[pyo3(signature = () -> "collections.abc.Generator[typing.Any, typing.Any, int]")]
+    fn __await__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&self) -> PyResult<usize> {
+        Err(pyo3::exceptions::PyStopIteration::new_err(self.value))
+    }
+}
+```
+
 To generate stubs file with `maturin` you can use `maturin generate-stubs --output stubs` that will build the project then generate the stubs in the `stubs` directory.
 You can also directly integrate the stubs in the built wheels by doing `maturin build --generate-stubs` (works also with `maturin develop`).
 

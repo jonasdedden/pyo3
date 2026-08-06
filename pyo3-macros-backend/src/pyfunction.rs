@@ -29,7 +29,9 @@ use syn::{ext::IdentExt, spanned::Spanned, LitCStr, LitStr, Path, Result, Token}
 
 mod signature;
 
-pub use self::signature::{ConstructorAttribute, FunctionSignature, SignatureAttribute};
+pub use self::signature::{
+    ConstructorAttribute, FunctionSignature, SignatureAttribute, SignatureItem,
+};
 
 #[derive(Clone, Debug)]
 pub struct PyFunctionArgPyO3Attributes {

@@ -37,10 +37,10 @@ impl MyClass {
 
 #[pymethods]
 impl MyClass {
-    #[pyo3(name = "__bool__", signature = ())]
-//~^ ERROR: `signature` cannot be used with magic method `__bool__`
-    fn signature_is_forbidden(&self) -> bool {
-        true
+    #[pyo3(name = "__truediv__", signature = (other = 1))]
+//~^ ERROR: `signature` can only annotate the arguments of magic method `__truediv__`
+    fn signature_cannot_give_a_default(&self, other: i32) -> i32 {
+        other
     }
 }
 
@@ -67,6 +67,15 @@ impl EqAndRichcmp {
 
     fn __richcmp__(&self, _other: &Self, _op: CompareOp) -> bool {
         true
+    }
+}
+
+#[pymethods]
+impl MyClass {
+    #[pyo3(name = "__mod__", signature = (*args))]
+//~^ ERROR: `signature` can only annotate the arguments of magic method `__mod__`
+    fn signature_cannot_take_varargs(&self, args: &Bound<'_, pyo3::types::PyTuple>) -> usize {
+        args.len()
     }
 }
 
