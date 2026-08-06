@@ -109,4 +109,6 @@ PyO3 also provides the smaller `pyo3-introspection` binary that allows to genera
   Modules declared using a function are not supported.
 - `FromPyObject::INPUT_TYPE` and `IntoPyObject::OUTPUT_TYPE` must be implemented for PyO3 to get the proper input/output type annotations to use.
 - PyO3 is not able to introspect the content of `#[pymodule]` and `#[pymodule_init]` functions.
+- `__await__` is always annotated as returning a `collections.abc.Generator`, because that is what a type checker requires of an awaitable.
+  What it awaits to is `typing.Any` unless `#[pyo3(signature = () -> "...")]` says otherwise, since the awaited value is carried by a `StopIteration` and does not appear in the Rust signature.
   If they are present, the module is tagged as incomplete using a fake `def __getattr__(name: str) -> Incomplete: ...` function [following best practices](https://typing.python.org/en/latest/guides/writing_stubs.html#incomplete-stubs).

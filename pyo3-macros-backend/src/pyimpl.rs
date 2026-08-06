@@ -501,6 +501,17 @@ pub fn method_introspection_code(
         // Hack to return Self while implementing IntoPyObject
         // TODO: use typing.Self?
         PyExpr::from_return_type(parse_quote!(#pyo3_path::PyClassGuard<Self>), Some(parent))
+    } else if name == "__await__" {
+        // What `__await__` returns is only ever consumed by `await`, which requires it to be typed
+        // as a generator. The Rust return type is usually the class itself, which does not say
+        // that, so the class would not count as `Awaitable` for a type checker.
+        //
+        // The awaited value is whatever the returned iterator raises `StopIteration` with, which
+        // the signature does not carry; `#[pyo3(signature = () -> "...")]` can name it.
+        PyExpr::subscript(
+            PyExpr::module_attr("collections.abc", "Generator"),
+            PyExpr::tuple([PyExpr::any(), PyExpr::any(), PyExpr::any()]),
+        )
     } else {
         match spec.output.clone() {
             ReturnType::Type(_, t) => PyExpr::from_return_type(*t, Some(parent)),

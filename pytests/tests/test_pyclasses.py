@@ -1,8 +1,10 @@
+import asyncio
 import platform
 import sys
 
 import pytest
 from pyo3_pytests import pyclasses
+from typing_extensions import assert_type
 
 
 def test_empty_class_init(benchmark):
@@ -52,6 +54,20 @@ def test_iter():
     with pytest.raises(StopIteration) as excinfo:
         next(i)
     assert excinfo.value.value == "Ended"
+
+
+def test_async_iter():
+    # `__await__` is introspected as returning a generator, without which `ReadyAwaitable` would
+    # not count as awaitable at all; `#[pyo3(returns = ...)]` is what makes the awaited value an
+    # `int` rather than `Any`
+    async def collect() -> list[int]:
+        values: list[int] = []
+        async for value in pyclasses.PyClassAsyncIter():
+            assert_type(value, int)
+            values.append(value)
+        return values
+
+    assert asyncio.run(collect()) == [1, 2, 3, 4, 5]
 
 
 @pytest.mark.skipif(

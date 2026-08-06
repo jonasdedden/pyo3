@@ -1,5 +1,6 @@
 from _typeshed import Incomplete
-from typing import Final, final
+from collections import abc
+from typing import Any, Final, final
 
 class AssertingBaseClass:
     """
@@ -111,6 +112,15 @@ class PlainObject:
         """
 
 @final
+class PyClassAsyncIter:
+    """
+    This is for demonstrating an async iterator built from a Rust-defined awaitable
+    """
+    def __aiter__(self, /) -> PyClassAsyncIter: ...
+    def __anext__(self, /) -> ReadyAwaitable: ...
+    def __new__(cls, /) -> PyClassAsyncIter: ...
+
+@final
 class PyClassIter:
     """
     This is for demonstrating how to return a value from __next__
@@ -124,6 +134,14 @@ class PyClassIter:
 @final
 class PyClassThreadIter:
     def __new__(cls, /) -> PyClassThreadIter: ...
+    def __next__(self, /) -> int: ...
+
+@final
+class ReadyAwaitable:
+    """
+    This is for demonstrating an awaitable which is already resolved when it is awaited
+    """
+    def __await__(self, /) -> abc.Generator[Any, Any, int]: ...
     def __next__(self, /) -> int: ...
 
 @final

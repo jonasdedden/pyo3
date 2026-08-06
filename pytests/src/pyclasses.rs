@@ -1,7 +1,7 @@
 use std::{thread, time};
 
 use pyo3::basic::CompareOp;
-use pyo3::exceptions::{PyAttributeError, PyStopIteration, PyValueError};
+use pyo3::exceptions::{PyAttributeError, PyStopAsyncIteration, PyStopIteration, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyComplex, PyType};
 #[cfg(not(any(Py_LIMITED_API, GraalPy)))]
@@ -46,6 +46,54 @@ impl PyClassIter {
             Ok(self.count)
         } else {
             Err(PyStopIteration::new_err("Ended"))
+        }
+    }
+}
+
+/// This is for demonstrating an awaitable which is already resolved when it is awaited
+#[pyclass]
+struct ReadyAwaitable {
+    value: usize,
+}
+
+#[pymethods]
+impl ReadyAwaitable {
+    // Without this, `__await__` would be introspected as returning `Generator[Any, Any, Any]` and
+    // `await` would give `Any`.
+    #[pyo3(signature = () -> "collections.abc.Generator[typing.Any, typing.Any, int]")]
+    fn __await__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&self) -> PyResult<usize> {
+        Err(PyStopIteration::new_err(self.value))
+    }
+}
+
+/// This is for demonstrating an async iterator built from a Rust-defined awaitable
+#[pyclass]
+#[derive(Default)]
+struct PyClassAsyncIter {
+    count: usize,
+}
+
+#[pymethods]
+impl PyClassAsyncIter {
+    #[new]
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    fn __aiter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __anext__(&mut self) -> PyResult<ReadyAwaitable> {
+        if self.count < 5 {
+            self.count += 1;
+            Ok(ReadyAwaitable { value: self.count })
+        } else {
+            Err(PyStopAsyncIteration::new_err(()))
         }
     }
 }
@@ -341,6 +389,6 @@ pub mod pyclasses {
     #[pymodule_export]
     use super::{
         map_a_class, AssertingBaseClass, ClassWithDecorators, ClassWithoutConstructor, EmptyClass,
-        Number, PlainObject, PyClassIter, PyClassThreadIter,
+        Number, PlainObject, PyClassAsyncIter, PyClassIter, PyClassThreadIter, ReadyAwaitable,
     };
 }

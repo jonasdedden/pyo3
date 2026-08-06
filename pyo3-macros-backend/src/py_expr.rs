@@ -87,6 +87,11 @@ impl PyExpr {
         Self::attribute(Self::Name { id: module.into() }, name)
     }
 
+    /// `typing.Any`
+    pub fn any() -> Self {
+        Self::module_attr("typing", "Any")
+    }
+
     /// The type hint of a `FromPyObject` implementation as a function argument
     ///
     /// If self_type is set, self_type will replace Self in the given type
