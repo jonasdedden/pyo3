@@ -124,8 +124,7 @@ class PyClassIter:
 @final
 class PyClassOptionAsyncIter:
     """
-    This is for demonstrating the `Option`-returning form of `__anext__`, where `None` means
-    `StopAsyncIteration` rather than a yielded `None`.
+    This is for demonstrating how to stop iteration by returning `None` from __anext__
     """
     def __aiter__(self, /) -> PyClassOptionAsyncIter: ...
     def __anext__(self, /) -> Any: ...
@@ -134,8 +133,7 @@ class PyClassOptionAsyncIter:
 @final
 class PyClassOptionIter:
     """
-    This is for demonstrating the `Option`-returning form of `__next__`, where `None` means
-    `StopIteration` rather than a yielded `None`.
+    This is for demonstrating how to stop iteration by returning `None` from __next__
     """
     def __iter__(self, /) -> PyClassOptionIter: ...
     def __new__(cls, /) -> PyClassOptionIter: ...
@@ -144,8 +142,7 @@ class PyClassOptionIter:
 @final
 class PyClassResultOptionIter:
     """
-    This is for demonstrating the fallible `Option`-returning form of `__next__`: the `Result` layer
-    carries the error, while `None` still means `StopIteration`.
+    This is for demonstrating how to stop iteration by returning `None` from a fallible __next__
     """
     def __iter__(self, /) -> PyClassResultOptionIter: ...
     def __new__(cls, /) -> PyClassResultOptionIter: ...

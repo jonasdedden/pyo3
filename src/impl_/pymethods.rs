@@ -614,43 +614,38 @@ unsafe fn call_super_clear(
     0
 }
 
-// Specialization for `__next__` / `__anext__`, whose Rust signature may use `Option` to encode
-// "iteration is over" instead of "yield `None`".
-//
-// The runtime conversion and the `experimental-inspect` type hint are resolved through the same
-// wrapper type by the same mechanism: the inherent items below cover the `Option`-shaped return
-// types and take priority over the blanket fallback impls, which cover everything else. A shape
-// therefore has to be listed in exactly one place to be picked up by both, and the sync and async
-// versions are generated from one macro so they cannot drift apart either.
+// `__next__` and `__anext__` may say "iteration is over" by returning `None`, written either as
+// `Option<T>` or as `Result<Option<T>, E>`. The slot conversion and the `experimental-inspect`
+// type hint both read that off the same wrapper: the inherent items below match those two shapes
+// and win over the blanket fallback impls, which cover every other return type. The sync and the
+// async wrapper come from one macro so they cannot drift apart either.
 macro_rules! iter_next_output {
-    (
-        $(#[$wrapper_meta:meta])*
-        $wrapper:ident,
-        $convert_fallback:ident,
-        $type_fallback:ident,
-        exhausted: $exhausted:expr $(,)?
-    ) => {
-        $(#[$wrapper_meta])*
+    ($wrapper:ident, $convert_fallback:ident, $type_fallback:ident, exhausted: $exhausted:expr) => {
         pub struct $wrapper<T>(pub T);
 
-        /// Conversion for return types which do not spell exhaustion as `None`; such a value is
-        /// converted like any other return value.
-        pub trait $convert_fallback<'py, Target> {
-            fn convert(self, py: Python<'py>) -> PyResult<Target>;
+        // The conversion bound sits on the method rather than on the impl, so that a return type
+        // which cannot be converted at all is reported as the missing `IntoPyCallbackOutput`
+        // rather than as this trait not being implemented.
+        pub trait $convert_fallback {
+            type Value;
+
+            fn convert<'py, Target>(self, py: Python<'py>) -> PyResult<Target>
+            where
+                Self::Value: IntoPyCallbackOutput<'py, Target>;
         }
 
-        impl<'py, Value, Target> $convert_fallback<'py, Target> for $wrapper<Value>
-        where
-            Value: IntoPyCallbackOutput<'py, Target>,
-        {
+        impl<Value> $convert_fallback for $wrapper<Value> {
+            type Value = Value;
+
             #[inline]
-            fn convert(self, py: Python<'py>) -> PyResult<Target> {
+            fn convert<'py, Target>(self, py: Python<'py>) -> PyResult<Target>
+            where
+                Value: IntoPyCallbackOutput<'py, Target>,
+            {
                 self.0.convert(py)
             }
         }
 
-        /// Type hint for return types which do not spell exhaustion as `None`; the whole return
-        /// type is visible from Python.
         #[cfg(feature = "experimental-inspect")]
         pub trait $type_fallback {
             const OUTPUT_TYPE: PyStaticExpr;
@@ -676,8 +671,6 @@ macro_rules! iter_next_output {
 
         #[cfg(feature = "experimental-inspect")]
         impl<Value: PyReturnType> $wrapper<Option<Value>> {
-            /// `None` ends the iteration rather than being yielded, so it is not part of the
-            /// Python-visible return type.
             pub const OUTPUT_TYPE: PyStaticExpr = <Value as PyReturnType>::OUTPUT_TYPE;
         }
 
@@ -698,32 +691,23 @@ macro_rules! iter_next_output {
 
         #[cfg(feature = "experimental-inspect")]
         impl<Value: PyReturnType, Error> $wrapper<Result<Option<Value>, Error>> {
-            /// `None` ends the iteration rather than being yielded, so it is not part of the
-            /// Python-visible return type.
             pub const OUTPUT_TYPE: PyStaticExpr = <Value as PyReturnType>::OUTPUT_TYPE;
         }
     };
 }
 
 iter_next_output!(
-    /// Wraps what `__next__` returned, so that the `Option`-means-`StopIteration` encoding is
-    /// resolved in one place for both the conversion and the introspection type hint.
     IterNextOutput,
     IterNextConvertFallback,
-    IterNextOutputTypeFallback,
-    exhausted: Ok(null_mut()),
+    IterNextTypeFallback,
+    exhausted: Ok(null_mut())
 );
 
 iter_next_output!(
-    /// Wraps what `__anext__` returned, so that the `Option`-means-`StopAsyncIteration` encoding is
-    /// resolved in one place for both the conversion and the introspection type hint.
-    ///
-    /// Note this only covers a plain `fn __anext__`: an `async fn __anext__` returns a coroutine
-    /// from the slot, so its `Option` is inside the awaited value and is a yielded `None`.
     AsyncIterNextOutput,
     AsyncIterNextConvertFallback,
-    AsyncIterNextOutputTypeFallback,
-    exhausted: Err(PyStopAsyncIteration::new_err(())),
+    AsyncIterNextTypeFallback,
+    exhausted: Err(PyStopAsyncIteration::new_err(()))
 );
 
 /// Re-exported so that `#[new]` generated code can resolve the type tag for `tp_new_impl`
@@ -753,57 +737,30 @@ mod tests {
     #[allow(unused_imports, reason = "conditionally used")]
     use crate::platform::prelude::*;
 
-    /// The type hints resolved by [`super::IterNextOutput`] and [`super::AsyncIterNextOutput`],
-    /// which are what the generated stubs use for `__next__` / `__anext__`.
     #[test]
     #[cfg(feature = "experimental-inspect")]
-    fn iter_next_output_type_strips_the_stop_encoding() {
-        use super::{AsyncIterNextOutput, AsyncIterNextOutputTypeFallback as _};
-        use super::{IterNextOutput, IterNextOutputTypeFallback as _};
-        use crate::inspect::PyStaticExpr;
-        use crate::inspect::{serialize_for_introspection, serialized_len_for_introspection};
+    fn iter_next_output_type() {
+        use super::{AsyncIterNextOutput, AsyncIterNextTypeFallback as _};
+        use super::{IterNextOutput, IterNextTypeFallback as _};
+        use crate::PyResult;
 
-        fn render(expr: PyStaticExpr) -> String {
-            let mut buffer = vec![0; serialized_len_for_introspection(&expr)];
-            let written = serialize_for_introspection(&expr, &mut buffer);
-            buffer.truncate(written);
-            String::from_utf8(buffer).unwrap()
+        // `None` ends the iteration instead of being yielded, so it is not part of the type
+        for hint in [
+            IterNextOutput::<Option<usize>>::OUTPUT_TYPE,
+            IterNextOutput::<PyResult<Option<usize>>>::OUTPUT_TYPE,
+            AsyncIterNextOutput::<Option<usize>>::OUTPUT_TYPE,
+            AsyncIterNextOutput::<PyResult<Option<usize>>>::OUTPUT_TYPE,
+            // and a return type without that encoding is left as it is
+            IterNextOutput::<PyResult<usize>>::OUTPUT_TYPE,
+            AsyncIterNextOutput::<usize>::OUTPUT_TYPE,
+        ] {
+            assert_eq!(hint.to_string(), "builtins.int");
         }
 
-        let int = render(<usize as crate::IntoPyObject<'_>>::OUTPUT_TYPE);
-        let int_or_none = render(<Option<usize> as crate::IntoPyObject<'_>>::OUTPUT_TYPE);
-        // guards the assertions below against `int | None` and `int` rendering the same
-        assert_ne!(int_or_none, int);
-
-        // `Option` is the `StopIteration` / `StopAsyncIteration` encoding, not a yielded value
-        assert_eq!(render(IterNextOutput::<Option<usize>>::OUTPUT_TYPE), int);
+        // only the outermost `Option` is the one meaning "iteration is over"
         assert_eq!(
-            render(IterNextOutput::<crate::PyResult<Option<usize>>>::OUTPUT_TYPE),
-            int
-        );
-        assert_eq!(
-            render(AsyncIterNextOutput::<Option<usize>>::OUTPUT_TYPE),
-            int
-        );
-        assert_eq!(
-            render(AsyncIterNextOutput::<crate::PyResult<Option<usize>>>::OUTPUT_TYPE),
-            int
-        );
-
-        // every other shape keeps the whole return type, `Option` included
-        assert_eq!(render(IterNextOutput::<usize>::OUTPUT_TYPE), int);
-        assert_eq!(
-            render(IterNextOutput::<crate::PyResult<usize>>::OUTPUT_TYPE),
-            int
-        );
-        assert_eq!(render(AsyncIterNextOutput::<usize>::OUTPUT_TYPE), int);
-        assert_eq!(
-            render(AsyncIterNextOutput::<Vec<Option<usize>>>::OUTPUT_TYPE),
-            render(<Vec<Option<usize>> as crate::IntoPyObject<'_>>::OUTPUT_TYPE)
-        );
-        assert_eq!(
-            render(IterNextOutput::<crate::PyResult<Vec<Option<usize>>>>::OUTPUT_TYPE),
-            render(<Vec<Option<usize>> as crate::IntoPyObject<'_>>::OUTPUT_TYPE)
+            IterNextOutput::<Vec<Option<usize>>>::OUTPUT_TYPE.to_string(),
+            "builtins.list[builtins.int | None]"
         );
     }
 

@@ -503,9 +503,9 @@ pub fn method_introspection_code(
         PyExpr::from_return_type(parse_quote!(#pyo3_path::PyClassGuard<Self>), Some(parent))
     } else {
         match spec.output.clone() {
-            // `__next__` and `__anext__` encode "iteration is over" as `None`, so their `Option`
-            // is not part of the Python-visible return type. An `async fn` returns a coroutine
-            // from the slot instead, so its `Option` really is yielded.
+            // `__next__` and `__anext__` may say "iteration is over" with `None`, in which case
+            // that `Option` is not part of the Python-visible return type. This is about the value
+            // the slot returns, so it does not apply to the coroutine an `async fn` returns.
             ReturnType::Type(_, t) if spec.asyncness.is_none() && name.as_str() == "__next__" => {
                 PyExpr::from_iter_next_return_type(*t, Some(parent))
             }

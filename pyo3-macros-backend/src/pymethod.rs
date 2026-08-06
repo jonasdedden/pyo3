@@ -1297,8 +1297,8 @@ enum ReturnMode {
     ReturnSelf,
     Conversion(TokenGenerator),
     /// `__next__` / `__anext__`: the return value goes through the wrapper named by the first
-    /// generator, whose inherent `convert` strips the `Option`-means-"iteration is over" encoding
-    /// and whose fallback trait, named by the second generator, handles every other shape.
+    /// generator, whose inherent `convert` handles the return types saying "iteration is over"
+    /// with `None`, and whose fallback trait, named by the second, handles all the others.
     IterConversion(TokenGenerator, TokenGenerator),
 }
 

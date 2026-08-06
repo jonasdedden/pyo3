@@ -59,8 +59,8 @@ def test_iter():
     "cls", [pyclasses.PyClassOptionIter, pyclasses.PyClassResultOptionIter]
 )
 def test_option_iter(cls):
-    """`__next__ -> Option<usize>` and `__next__ -> PyResult<Option<usize>>` both stop on `None`
-    rather than yielding it, which is why the generated stubs say `-> int` and not `-> int | None`."""
+    # `None` stops the iteration rather than being yielded, which is why the stubs for these
+    # classes say `-> int` and not `-> int | None`
     assert list(cls()) == [1, 2, 3, 4, 5]
 
     i = cls()
@@ -71,9 +71,6 @@ def test_option_iter(cls):
 
 
 def test_option_async_iter():
-    """Same for `__anext__ -> PyResult<Option<_>>`: `None` raises `StopAsyncIteration`, so the stub
-    says `-> Any` and not `-> Any | None`."""
-
     async def collect():
         return [value async for value in pyclasses.PyClassOptionAsyncIter()]
 
