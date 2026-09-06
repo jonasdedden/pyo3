@@ -88,8 +88,9 @@ pub fn class_introspection_code(
                 condition: quote! {
                     #pyo3_crate_path::impl_::introspection::is_disjoint_base::<#ident>()
                 },
-                then: Box::new(IntrospectionNode::List(vec![PyExpr::module_attr(
-                    "typing_extensions",
+                then: Box::new(IntrospectionNode::List(vec![PyExpr::attribute(
+                    // `typing.disjoint_base` is new in Python 3.15
+                    PyExpr::typing_or_extensions_if_less(15),
                     "disjoint_base",
                 )
                 .into()])),

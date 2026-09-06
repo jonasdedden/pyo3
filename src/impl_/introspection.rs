@@ -55,6 +55,18 @@ pub const fn is_disjoint_base<T: PyClassImpl>() -> bool {
     <T::Layout as PyClassObjectLayout<T>>::IS_DISJOINT_BASE
 }
 
+/// The module to import `typing` features new in Python 3.15 from: `typing` itself when targeting
+/// 3.15 or newer, `typing_extensions` otherwise.
+pub const fn typing_or_extensions_if_not_3_15() -> PyStaticExpr {
+    PyStaticExpr::Name {
+        id: if cfg!(Py_3_15) {
+            "typing"
+        } else {
+            "typing_extensions"
+        },
+    }
+}
+
 #[repr(C)]
 pub struct SerializedIntrospectionFragment<const LEN: usize> {
     pub length: u32,
@@ -233,6 +245,21 @@ mod tests {
             // The cases must not all agree by accident.
             assert!(is_disjoint_base::<WithField>());
             assert!(!is_disjoint_base::<EmptyChild>());
+        });
+    }
+
+    #[test]
+    fn typing_is_only_chosen_when_it_has_disjoint_base() {
+        Python::attach(|py| {
+            let PyStaticExpr::Name { id } = typing_or_extensions_if_not_3_15() else {
+                panic!("expected a module name");
+            };
+            let typing_has_it = py
+                .import("typing")
+                .unwrap()
+                .hasattr("disjoint_base")
+                .unwrap();
+            assert!(id == "typing_extensions" || typing_has_it);
         });
     }
 }
